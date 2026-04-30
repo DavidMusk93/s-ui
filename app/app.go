@@ -101,6 +101,11 @@ func (a *APP) Stop() {
 	if err != nil {
 		logger.Warning("stop Core err:", err)
 	}
+	// CAUTION: Stop() must CloseDB() before restart. Without this,
+	// SIGHUP restart orphans the old pool and leaks FDs.
+	if err := database.CloseDB(); err != nil {
+		logger.Warning("close DB err:", err)
+	}
 }
 
 func (a *APP) initLog() {

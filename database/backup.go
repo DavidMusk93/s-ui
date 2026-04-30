@@ -42,7 +42,15 @@ func GetDb(exclude string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(dbPath)
+	// CAUTION: gorm.Open creates a *sql.DB pool. On error paths the
+	// old code leaked FDs because Close() was only reached at the end.
+	// This defer guarantees the pool is closed before return.
+	defer func() {
+		if sqlDB, err := backupDb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+		_ = os.Remove(dbPath)
+	}()
 
 	err = backupDb.AutoMigrate(
 		&model.Setting{},
@@ -147,9 +155,6 @@ func GetDb(exclude string) ([]byte, error) {
 		return nil, err
 	}
 
-	bdb, _ := backupDb.DB()
-	bdb.Close()
-
 	// Open the file for reading
 	file, err := os.Open(dbPath)
 	if err != nil {
@@ -202,9 +207,9 @@ func ImportDB(file multipart.File) error {
 	// Remove temp file before returning
 	defer os.Remove(tempPath)
 
-	// Close old DB
-	old_db, _ := db.DB()
-	old_db.Close()
+	// CAUTION: Close the old pool BEFORE file swap. Otherwise the new
+	// InitDB() overwrites db without closing, leaking FDs.
+	_ = CloseDB()
 
 	// Save uploaded file to temporary file
 	_, err = io.Copy(tempFile, file)
@@ -217,8 +222,11 @@ func ImportDB(file multipart.File) error {
 	if err != nil {
 		return common.NewErrorf("Error checking db: %v", err)
 	}
-	newDb_db, _ := newDb.DB()
-	newDb_db.Close()
+	// Ensure the validation pool is closed immediately so we do not
+	// hold extra FDs while renaming files.
+	if sqlDB, err := newDb.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
 
 	// Backup the current database for fallback
 	fallbackPath := fmt.Sprintf("%s.backup", config.GetDBPath())

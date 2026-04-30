@@ -25,6 +25,14 @@ func MigrateDb() {
 		log.Fatal(err)
 		return
 	}
+	// CAUTION: MigrateDb opens its own pool. Without this defer the
+	// pool leaks every time the function runs.
+	defer func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+
 	tx := db.Begin()
 	defer func() {
 		if err == nil {
